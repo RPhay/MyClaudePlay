@@ -1,0 +1,10 @@
+{
+  "name": "doc-search",
+  "version": "0.1.0",
+  "description": "Search, load, and manage documentation across the project",
+  "icon": "🔍",
+  "author": "Claude",
+  "requires": {
+    "claude-code": ">=1.0.0"
+  }
+}
