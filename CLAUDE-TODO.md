@@ -64,16 +64,39 @@ A 20-turn session asking three doc questions, at turns 5, 10, and 15.
 | Q3 (uix) | +5,300, persists | +150 |
 | Docs in main context at end | **10,370** | **~720** |
 
-Because context is re-sent every turn, the end-state figure understates it. Cost
-carried across the session:
+Because the entire context is re-sent to the model on every turn, the end-state
+figure understates the cost badly. A doc costs its size **once** to read, and its
+size **again on every subsequent turn**.
 
-| | Direct read | Via agent |
+Summed turn by turn across the 20 turns:
+
+| | Sent to Opus | Haiku (once, never re-sent) |
 |---|---|---|
-| Opus token-turns carried | **~94,000** | **~4,500** |
-| Haiku tokens (paid once, not re-sent) | 0 | ~60,000 |
+| Direct read | **109,500** | 0 |
+| Via agent | **10,350** | 60,000 |
 
-At roughly 1/10–1/20 the price per token, that Haiku load is ~3–6k
-Opus-equivalent. **Net ≈ 94k vs ≈ 10k Opus-equivalent, so 9–10x.**
+At roughly 1/15 the price per token, 60k Haiku ≈ 4,000 Opus-equivalent.
+**Net ≈ 109,500 vs ≈ 14,350, so about 7.6x.**
+
+> **Correction:** an earlier version of this file said ~94,000 vs ~10,000 and
+> "9-10x". That was estimated rather than summed. The figures above are the
+> turn-by-turn arithmetic and supersede it. Worth re-deriving independently
+> before relying on them — the correction came from redoing the same sum by hand,
+> not from new data.
+
+Smaller worked example, to make the mechanic legible — 6 turns, one question at
+turn 2, direct read:
+
+| Turn | In context | Sent |
+|---|---|---|
+| 1 | index (270) | 270 |
+| 2 | index + doc (3,900) | 4,170 |
+| 3-6 | same | 4,170 each |
+| | | **21,120 total** |
+
+Via agent the same session sends 270 + (420 x 5) = **2,370**, plus 20,000 Haiku
+once. The doc is read once but carried five times; that gap is the entire
+argument.
 
 #### Caveats — these are the important part
 
