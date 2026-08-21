@@ -24,6 +24,90 @@ so this only affects the explicit slash command.
 
 **Not decided.**
 
+### Revisit the context-cost model — OPEN DISCUSSION, resume this
+
+**Ryan asked to be reminded of this and to walk through more scenarios. Raise it
+next session; do not let it drop.**
+
+The numbers below assume one usage shape. They are the basis for the whole
+delegate-by-default design, so if the assumptions are wrong the design is wrong.
+Scenarios still to work through are listed at the end.
+
+#### Measured inputs
+
+Corpus (measured on disk):
+
+| Doc | Bytes | ≈ Tokens |
+|---|---|---|
+| `feature-structure.md` | 15,508 | 3,900 |
+| `tech-stack.md` | 3,568 | 900 |
+| `uix.md` | 21,254 | 5,300 |
+| **Total** | **40,330** | **~10,100** |
+
+Token counts are estimated at ~4 bytes/token. Byte counts are measured.
+
+Agent runs (measured, actual): 20,331 and 22,186 subagent tokens, returning ~4
+and ~10 lines respectively. Durations 22.4s and 7.9s.
+
+Startup hook: 1,076 bytes ≈ 270 tokens (was 15,550 bytes before the index
+change).
+
+#### The modeled scenario
+
+A 20-turn session asking three doc questions, at turns 5, 10, and 15.
+
+| | Direct read | Via agent |
+|---|---|---|
+| Startup | 270 | 270 |
+| Q1 (feature-structure) | +3,900, persists | +150 |
+| Q2 (tech-stack) | +900, persists | +150 |
+| Q3 (uix) | +5,300, persists | +150 |
+| Docs in main context at end | **10,370** | **~720** |
+
+Because context is re-sent every turn, the end-state figure understates it. Cost
+carried across the session:
+
+| | Direct read | Via agent |
+|---|---|---|
+| Opus token-turns carried | **~94,000** | **~4,500** |
+| Haiku tokens (paid once, not re-sent) | 0 | ~60,000 |
+
+At roughly 1/10–1/20 the price per token, that Haiku load is ~3–6k
+Opus-equivalent. **Net ≈ 94k vs ≈ 10k Opus-equivalent, so 9–10x.**
+
+#### Caveats — these are the important part
+
+1. **The agent burns MORE raw tokens, not fewer.** ~20k per question versus 3,900
+   to read the file directly. The entire win is *where* they are spent: on a cheap
+   model, once, never re-sent. Anyone reading "9-10x cheaper" as "does less work"
+   has it backwards.
+2. **Direct wins for one-shot.** One question at the end of a session: 3,900
+   tokens immediately, versus ~20k plus 8–22 seconds of latency. The crossover is
+   roughly **2–3 turns of remaining session**. Past that, compounding dominates.
+3. **Latency is real and was measured** — 7.9s and 22.4s. Not free, and it is
+   paid on every question.
+4. **The ~4 bytes/token estimate is unverified.** Only byte counts and subagent
+   token totals are measured. Worth checking against a real tokenizer before
+   leaning harder on these figures.
+5. **The 20k-per-run agent cost may be mostly fixed overhead**, not proportional
+   to doc size — both runs cost about the same despite doing different work. If
+   so, the agent gets relatively cheaper as docs grow, and relatively worse for
+   small ones. Not yet tested.
+6. **Two data points is not a sample.** Both runs were on this repo, this corpus,
+   this pair of tasks.
+
+#### Scenarios still to walk through
+
+- Very short sessions (1–3 turns) — does delegation ever pay?
+- Very long sessions (50+ turns) — does the gap widen as modeled?
+- Many small docs vs. few large ones, given caveat 5
+- Repeat questions about the *same* doc — direct read amortizes, the agent re-pays
+  ~20k every time. This may be where direct actually wins outright.
+- A much larger corpus (10x the docs) — does the startup index stay small enough?
+- Sessions that never touch docs at all — currently paying 270 tokens for nothing
+- Auto-compaction interacting with all of this: compaction may already collapse a
+  large loaded doc, which would weaken the carrying-cost argument. **Unexamined.**
+
 ---
 
 ## Bugs
