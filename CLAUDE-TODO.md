@@ -3,195 +3,507 @@
 Open work on this repo. Items are marked **verified** (I reproduced it) or
 **suspected** (reasoned from the code, not yet triggered).
 
+Last worked: 2026-08-20.
+
 ---
 
 ## Decisions needed
 
-### Route `/doc-search` to the agent, or leave it inline?
+*(none open)*
 
-Right now `/doc-search` loads the skill, which runs the script inline — output
-lands in the caller's context. Only the agent path keeps documents out.
+---
 
-Rewiring means cutting `SKILL.md` down to a few lines that hand the arguments to
-the agent. The skill still loads (a few hundred tokens); it just delegates
-instead of executing.
+## The context-cost model — REWRITTEN 2026-08-20
 
-The tradeoff: `/doc-search --load feature-structure` would stop returning raw
-document text, since the agent summarizes by design. Leaving it inline preserves
-that as a deliberate escape hatch for when you *want* the full document — editing
-it, quoting it verbatim. `CLAUDE.md` already routes the normal path to the agent,
-so this only affects the explicit slash command.
+Ryan asked for this to be raised and for more scenarios to be walked through.
+Done. The result is that the previously committed model was wrong in two ways
+that pull in the same direction, and the headline number was overstated by
+roughly 4x.
 
-**Not decided.**
+**The design conclusion survives. The magnitude does not.**
 
-### Revisit the context-cost model — OPEN DISCUSSION, resume this
+Subagent cost has since been **measured against document size** (see below),
+which supersedes the assumed flat 20k run used in the first pass. On measured
+costs the baseline scenario is **3.21x**, not the 1.82x computed from the
+assumption, and not the 7.60x originally committed.
 
-**Ryan asked to be reminded of this and to walk through more scenarios. Raise it
-next session; do not let it drop.**
+### What was wrong
 
-The numbers below assume one usage shape. They are the basis for the whole
-delegate-by-default design, so if the assumptions are wrong the design is wrong.
-Scenarios still to work through are listed at the end.
+1. **The price ratio was 15:1. It is 5:1.** Verified against the `claude-api`
+   skill's pricing table (cached 2026-06-24): Claude Opus 5 input is $5.00/1M,
+   Claude Haiku 4.5 input is $1.00/1M. Haiku work is 5x cheaper, not 15x. The old
+   file's "at roughly 1/15 the price per token" tripled the apparent discount on
+   every subagent token.
 
-#### Measured inputs
+2. **Prompt caching was never in the model, and it is the dominant term.** The
+   old model charged a carried document full price on every subsequent turn. It
+   is not full price — it is a cache read at **~0.1x base input**. Cache writes
+   are 1.25x (5-minute TTL) or 2.0x (1-hour TTL); this session runs the 1-hour
+   TTL. So a doc read at turn `t` in an `N`-turn session costs
+   `D x (2.0 + 0.1 x (N - t))`, not `D x (N - t + 1)`.
 
-Corpus (measured on disk):
+   At N=20, t=5 that is 3.5xD, not 16xD. The carrying cost — the entire argument
+   for delegating — is about **4.6x smaller** than the file claimed.
 
-| Doc | Bytes | ≈ Tokens |
+3. **Caveat 2 was wrong on its own terms.** It said "direct wins for one-shot"
+   and put the crossover at 2-3 turns. Even at the corrected 5:1 ratio, 20k Haiku
+   tokens is 4,000 Opus-equivalent, against 3,877 to carry `feature-structure.md`
+   once. There is no clean one-shot win for direct; with caching the agent is
+   ahead from turn 1. The caveat was right that latency is real, and only that.
+
+### The corrected numbers
+
+Everything below is dollars, computed rather than asserted, under: index 270
+tokens, agent answer 150 tokens, subagent run 20,000 tokens at 95% input / 5%
+output, 1-hour cache TTL. `>1.00x` means the agent is cheaper.
+
+| Scenario | No cache | **With cache (real)** |
 |---|---|---|
-| `feature-structure.md` | 15,508 | 3,900 |
-| `tech-stack.md` | 3,568 | 900 |
-| `uix.md` | 21,254 | 5,300 |
-| **Total** | **40,330** | **~10,100** |
+| 20 turns, 3 questions — *the committed baseline* | 4.41x | **1.82x** |
+| 50 turns, 3 questions | 9.05x | **3.25x** |
+| 100 turns, 3 questions | 11.38x | **5.03x** |
+| 200 turns, 3 questions | 12.78x | **7.29x** |
 
-Token counts are estimated at ~4 bytes/token. Byte counts are measured.
+The old file's headline for row 1 was **7.6x**. It is **1.82x**.
 
-Agent runs (measured, actual): 20,331 and 22,186 subagent tokens, returning ~4
-and ~10 lines respectively. Durations 22.4s and 7.9s.
+### The seven scenarios that were owed
 
-Startup hook: 1,076 bytes ≈ 270 tokens (was 15,550 bytes before the index
-change).
+1. **Very short sessions (1-3 turns).** Agent wins throughout — 1.47x at a single
+   turn, 1.59x at three. Caching *helps* the agent here, because the doc's first
+   turn in context is a 2.0x cache write, which is worse than paying 1.0x once.
+   The old "direct wins for one-shot" claim does not hold.
 
-#### The modeled scenario
+2. **Very long sessions (50-200 turns).** The gap does widen, but far more slowly
+   than modeled: 3.25x / 5.03x / 7.29x rather than 11.67x / 13.03x / 13.70x.
+   Cache reads at 0.1x flatten the compounding that drove the original argument.
 
-A 20-turn session asking three doc questions, at turns 5, 10, and 15.
+3. **Many small docs vs few large ones — the framing was wrong.** Sweeping doc
+   size against question count shows the deciding variable is **document size
+   alone**; question count barely moves it (0.82x at 900 tokens with one
+   question, 0.69x with eight). Caveat 5 is confirmed — the subagent cost is
+   effectively fixed per run — but the useful form is a **crossover size**:
 
-| | Direct read | Via agent |
+   | Session length | Crossover |
+   |---|---|
+   | 10 turns | ~1,900 tokens/doc |
+   | 20 turns | ~1,450 tokens/doc |
+   | 30 turns | ~1,170 tokens/doc |
+   | 50 turns | ~870 tokens/doc |
+   | 100 turns | ~560 tokens/doc |
+
+   **Those figures assumed a flat 20k run and are superseded.** With the
+   measured cost function the crossover is roughly 2.4x lower:
+
+   | Session length | Assumed H=20k | **Measured H(D)** |
+   |---|---|---|
+   | 10 turns | ~1,860 | **~770** |
+   | 20 turns | ~1,410 | **~590** |
+   | 30 turns | ~1,150 | **~500** |
+   | 50 turns | ~860 | **~390** |
+   | 100 turns | ~560 | **~290** |
+
+   Below the line, reading the document directly is cheaper than asking the
+   agent. On measured costs **every document in this repo is above it** — at 20
+   turns, `tech-stack.md` 1.25x, `feature-structure.md` 3.58x, `uix.md` 4.43x.
+   An earlier version of this file said `tech-stack.md` favoured direct reading
+   at 0.65x; that came from the assumed 20k run and measurement reverses it.
+
+4. **Repeat questions about the same doc.** The old file guessed direct would
+   "win outright" here. It does not — 3.92x to 4.20x in the agent's favour, and
+   essentially flat from 2 questions on. The reasoning behind the guess was
+   sound (direct amortises, the agent re-pays) but it ignored that re-carrying
+   a 5,313-token doc for 28 more turns is itself the expensive part.
+
+5. **A 10x corpus.** The index is ~25 tokens per doc plus ~200 fixed. 30 docs is
+   ~950 tokens, 100 docs ~2,700, 300 docs ~7,700. At 300 docs the index alone
+   approaches the size of one document, and the "load an index at startup"
+   premise starts to erode. It holds comfortably to ~100 docs.
+
+6. **Sessions that never touch docs.** 270 tokens per turn for nothing: 5,400
+   tokens over 20 turns, 13,500 over 50 — but as cached reads after turn 1, so
+   under a cent. Not worth optimising.
+
+7. **Compaction.** Still the weakest part. Modeled as a single collapse at turn
+   C summarising docs to ~200 tokens, it cuts the direct-read cost substantially
+   and non-monotonically (best when compaction lands just after the last read).
+   Real compaction is not one event at a known turn, and this remains
+   **unexamined** rather than modeled.
+
+### Break-even, as a usable rule
+
+At what per-run subagent cost does direct become cheaper (cached)?
+
+| Session | Break-even per run |
+|---|---|
+| 5 turns, 1 question | ~37,000 tokens |
+| 20 turns, 3 questions | ~39,000 tokens |
+| 50 turns, 3 questions | ~79,000 tokens |
+| 100 turns, 3 questions | ~146,000 tokens |
+| 30 turns, 6 small docs | ~14,000 tokens |
+
+Or inverted, which is more useful: at a 20k run and 20 turns, delegation pays for
+any document over **~1,450 tokens**.
+
+Measured runs so far: **6,620** (`--update`, 6.2s), **20,331**, **22,186**. All
+sit under break-even except in the many-small-docs case, where 20k runs are
+already past it.
+
+### Arithmetic check
+
+The closed form above was cross-checked against a turn-by-turn simulation across
+240 combinations of cached/uncached, session length, read turn, and doc size —
+all agree exactly. One case by hand, for anyone re-deriving it:
+
+```
+uix.md (5,313 tokens) read at turn 5, 20-turn session, cached:
+  cache write  5313 x 2.0 x $5/1M           = $0.053130
+  cache reads  5313 x 0.1 x $5/1M x 15      = $0.039848
+  total                                     = $0.092978
+old model      5313 x $5/1M x 16            = $0.425040   (4.57x overstated)
+```
+
+### Four strategies compared — measured — 2026-08-20
+
+An earlier version of this file compared delegation only against "read the one
+correct document directly". That baseline was wrong: it granted the no-system
+case a perfectly targeted single read, which is exactly the work doc-search
+exists to do. The real alternatives are below.
+
+**Measured head-to-head.** Three questions, none naming a file, asked of an
+unguided reader (Grep/Glob/Read, doc-search forbidden) and of the doc-search
+agent. Same model (Haiku 4.5), same harness. Both answered all three correctly.
+
+| Question | Unguided | Calls | doc-search | Calls | Ratio |
+|---|---|---|---|---|---|
+| feature folder layout | 24,913 | 3 | 12,210 | 2 | 2.04x |
+| db + node version | 20,358 | 2 | 7,620 | 1 | 2.67x |
+| row column logic | 26,050 | 3 | 14,794 | 3 | 1.76x |
+| **Mean** | **23,774** | | **11,541** | | **2.06x** |
+
+Unguided costs 2.06x for the same answer — **not** because it reads more text
+(both read the document) but because it takes more tool round-trips, and every
+round-trip re-sends everything accumulated so far.
+
+**Whole-session comparison**, 20-turn Opus 5 session, three questions, one per
+document:
+
+| Strategy | Main ctx | Billable | Subagent | $ | vs A |
+|---|---|---|---|---|---|
+| **A.** No system — Claude reads at whim | 11,005 | 32,298 | 0 | $0.1615 | 1.00x |
+| **B.** Load all docs at SessionStart | 10,105 | 39,410 | 0 | $0.1970 | **0.82x** |
+| **C.** doc-search inline, no agent | 10,375 | 30,652 | 0 | $0.1533 | 1.05x |
+| **D.** doc-search via agent (current) | 795 | 2,628 | 29,544 | **$0.0486** | **3.32x** |
+
+Two results matter more than the headline.
+
+**B is worse than doing nothing.** Loading the corpus at startup costs 0.82x —
+you pay for every document on every turn whether or not the session touches
+docs. That is the design this repo already moved away from, and the number
+confirms it was not merely inelegant but actively negative.
+
+**C is worth almost nothing.** The index plus targeted loading — the whole skill,
+minus the agent — beats unguided reading by **5%**. Essentially all the value is
+in the subagent, not in the index or the script. That is worth knowing given
+`/doc-search` was deliberately left inline: the inline path is a convenience for
+getting raw text, not a cost optimisation, and should not be described as one.
+
+Strategy A above still assumes the unguided reader finds the right document on
+the first try. Applying the measured 2.06x round-trip penalty puts it at $0.3327,
+or **6.8x** worse than D.
+
+### Which model the subagent runs on — measured — 2026-08-20
+
+Same task 22 times (`--load uix`, three-bullet summary), varying only the
+subagent model. Baseline for comparison: the main session is Claude Opus 5, one
+question about `uix.md` (5,319 tokens) at turn 5 of a 20-turn session.
+
+**Tokens — the headline.**
+
+| Strategy | Main context (Opus) | Subagent | Total |
+|---|---|---|---|
+| **No strategy — read it directly** | **85,104** | 0 | **85,104** |
+| Delegate to Haiku 4.5 | 2,400 | 11,876 | 14,276 |
+| Delegate to Sonnet 5 | 2,400 | 15,770 | 18,170 |
+| Delegate to Opus 5 | 2,400 | 11,905 | 14,305 |
+| Delegate to Fable 5 | 2,400 | 11,894 | 14,294 |
+
+Reading directly moves **6.0x more tokens** than delegating, because the document
+is re-sent on all 16 remaining turns. Cache-weighted, that is 18,616 billable
+Opus tokens against 525.
+
+**Token count barely varies by model — except Sonnet 5.** Haiku 11,876, Opus
+11,905, Fable 11,894 all sit within 0.25% of each other. Sonnet 5 uses **15,770,
+about 33% more**, consistently across both runs. Unexplained; the split between
+input and output was not measured, and Sonnet's answers were visibly longer, so
+it may be output rather than tokenizer.
+
+**Opus 5 and Fable 5 runs were bit-identical in cost** — 11,905 twice, 11,894 —
+matching the near-determinism seen on Haiku (sd 17 over five runs).
+
+**Dollars per question**, subagent priced at its own model, main context always
+Opus 5:
+
+| Strategy | Main | Subagent | Total | vs direct |
+|---|---|---|---|---|
+| Read `uix.md` directly | $0.0931 | — | **$0.0931** | 1.00x |
+| Delegate to **Haiku 4.5** | $0.0031 | $0.0143 | **$0.0173** | **5.38x** |
+| Delegate to Sonnet 5 (intro) | $0.0031 | $0.0379 | $0.0409 | 2.28x |
+| Delegate to Sonnet 5 (list) | $0.0031 | $0.0568 | $0.0598 | 1.56x |
+| Delegate to Opus 5 | $0.0031 | $0.0714 | $0.0745 | 1.25x |
+| Delegate to **Fable 5** | $0.0031 | $0.1427 | **$0.1458** | **0.64x — LOSES** |
+
+> **Correction.** An earlier version of this table read 6.42x / 1.86x / 1.50x /
+> 0.77x. Those applied a 5% output-token fraction to main-context tokens.
+> Document text sitting in context is input only, so the direct-read baseline was
+> overstated by 1.20x. The ordering is unchanged and Fable still loses.
+
+Sonnet 5 intro pricing ($2/$10) runs through **2026-08-31**; after that it moves
+to $3/$15 and the 2.72x becomes 1.86x.
+
+**Crossover document size by subagent model** — below this size, reading the
+document straight into Opus is cheaper than delegating:
+
+| Subagent | 10 turns | 20 turns | 30 turns | 50 turns | 100 turns |
+|---|---|---|---|---|---|
+| Haiku 4.5 | 650 | 511 | 432 | 346 | 262 |
+| Sonnet 5 | 2,775 | 1,890 | 1,451 | 1,015 | 620 |
+| Opus 5 | 3,861 | 2,511 | 1,881 | 1,279 | 754 |
+| Fable 5 | 18,683 | 7,779 | 4,953 | 2,909 | 1,487 |
+
+Applied to this repo, 20-turn session (savings multiple; under 1.00x loses money):
+
+| Doc | Direct | Haiku | Sonnet | Opus | Fable |
+|---|---|---|---|---|---|
+| `tech-stack.md` (900) | $0.0252 | 1.39x | **0.57x** | **0.47x** | **0.26x** |
+| `feature-structure.md` (3,886) | $0.0879 | 4.01x | 1.49x | 1.22x | **0.65x** |
+| `uix.md` (5,319) | $0.1180 | 4.97x | 1.78x | 1.46x | **0.77x** |
+
+**Conclusion: the Haiku pin in `.claude/agents/doc-search.md` is doing most of
+the work.** On Haiku every document in this repo pays. On Opus or Sonnet only the
+two large ones do. On Fable delegation never pays here at all — the subagent
+costs more than the context it saves. If the agent's `model: haiku` were ever
+removed or overridden, the economics invert for the smallest doc immediately.
+
+### Agent run cost — measured, 17 runs — 2026-08-20
+
+This supersedes the doc-size fit below. Regressing subagent tokens on **the
+script's output size** (not document size) unifies every mode into one function:
+
+```
+H(S) = 6,316 + 1.0486 x S        R^2 = 0.99970,  n = 17,  worst residual 112 tokens
+```
+
+where `S` is the tokens `doc-search.sh` prints. Three findings.
+
+**1. It is effectively deterministic.** Five identical `--load uix` runs:
+11,855 / 11,867 / 11,874 / 11,887 / 11,899. Mean 11,876, sd 17.1, range 0.37% of
+mean. The cost function is not fitted noise.
+
+**2. There is a hard floor of ~6,400 tokens per run**, paid before any document
+is read. Measured four independent ways, all agreeing:
+
+| Run type | Tokens |
+|---|---|
+| `--load` on a 5-token document | 6,366 / 6,296 |
+| `--load --refs-only` | 6,297 / 6,295 |
+| `--update` | 6,510 / 6,620 |
+| `--analyze` | 6,509 |
+
+Mean of all nine low-output runs: 6,410, sd 115 — and the regression's
+independently-derived intercept is 6,316. This is the price of *asking*. It is
+also the answer to the earlier question about why `--update` and `--analyze`
+looked cheap: they are not a different kind of work, they just print very little.
+
+**3. Output format is the largest lever available.** Cost tracks what the script
+prints, so `--summary` collapses to near the floor regardless of document size:
+
+| Doc | Format | Script output | Run cost | vs full |
+|---|---|---|---|---|
+| `uix.md` | full | 5,319 | 11,899 | 100% |
+| `uix.md` | `--summary` | 127 | 6,405 | 54% |
+| `uix.md` | `--refs-only` | 15 | 6,297 | 53% |
+| `tech-stack.md` | full | 900 | 7,237 | 100% |
+| `tech-stack.md` | `--summary` | 66 | 6,396 | 88% |
+
+The saving is real but it is **not free**: `--summary` returns one paragraph, so
+it answers "what is this document about" and nothing more. It is a cheaper
+question, not a cheaper answer.
+
+**Dollars per run** (Haiku 4.5, $1/1M in, $5/1M out; range spans all-input to
+10% output):
+
+| Run | Tokens | Cost |
 |---|---|---|
-| Startup | 270 | 270 |
-| Q1 (feature-structure) | +3,900, persists | +150 |
-| Q2 (tech-stack) | +900, persists | +150 |
-| Q3 (uix) | +5,300, persists | +150 |
-| Docs in main context at end | **10,370** | **~720** |
+| floor — `--refs-only`, `--update`, `--summary` | ~6,400 | $0.0064–$0.0090 |
+| `--load tech-stack` | 7,267 | $0.0073–$0.0102 |
+| `--load feature-structure` | 10,503 | $0.0105–$0.0147 |
+| `--load uix` | 11,876 | $0.0119–$0.0166 |
 
-Because the entire context is re-sent to the model on every turn, the end-state
-figure understates the cost badly. A doc costs its size **once** to read, and its
-size **again on every subsequent turn**.
+**Whole session** — 20 turns, 3 questions, cached: **$0.1533 direct vs $0.0475
+delegated, 3.23x**, a difference of $0.106 per session. At 20 such sessions a
+month that is $3.07 against $0.95. The ratio is the interesting number; the
+absolute amounts are small enough that this should be decided on context
+pressure, not cost.
 
-Summed turn by turn across the 20 turns:
+**Crossover on the measured function** — below this document size, reading
+directly is cheaper than asking:
 
-| | Sent to Opus | Haiku (once, never re-sent) |
-|---|---|---|
-| Direct read | **109,500** | 0 |
-| Via agent | **10,350** | 60,000 |
+| Session | Crossover |
+|---|---|
+| 10 turns | ~760 tokens |
+| 20 turns | ~590 tokens |
+| 30 turns | ~490 tokens |
+| 50 turns | ~390 tokens |
+| 100 turns | ~285 tokens |
 
-At roughly 1/15 the price per token, 60k Haiku ≈ 4,000 Opus-equivalent.
-**Net ≈ 109,500 vs ≈ 14,350, so about 7.6x.**
+Every document in this repo is above the line at every session length.
 
-> **Correction:** an earlier version of this file said ~94,000 vs ~10,000 and
-> "9-10x". That was estimated rather than summed. The figures above are the
-> turn-by-turn arithmetic and supersede it. Worth re-deriving independently
-> before relying on them — the correction came from redoing the same sum by hand,
-> not from new data.
+### Earlier doc-size fit (superseded by the above) — 2026-08-20
 
-Smaller worked example, to make the mechanic legible — 6 turns, one question at
-turn 2, direct read:
+Caveat 5 asked whether the ~20k per run was mostly fixed overhead. Measured by
+running the agent three times with an identical task shape (`--load <doc>`, then
+a three-bullet summary), varying only the document:
 
-| Turn | In context | Sent |
-|---|---|---|
-| 1 | index (270) | 270 |
-| 2 | index + doc (3,900) | 4,170 |
-| 3-6 | same | 4,170 each |
-| | | **21,120 total** |
+| Doc | Est. tokens | Subagent tokens | Duration |
+|---|---|---|---|
+| `tech-stack.md` | 892 | 7,297 | 7.6s |
+| `feature-structure.md` | 3,877 | 10,503 | 6.3s |
+| `uix.md` | 5,313 | 11,855 | 9.8s |
 
-Via agent the same session sends 270 + (420 x 5) = **2,370**, plus 20,000 Haiku
-once. The doc is read once but carried five times; that gap is the entire
-argument.
+Least-squares fit, with residuals under 1% on all three:
 
-#### Caveats — these are the important part
+```
+H(D) = 6,398 + 1.038 x D
+```
 
-1. **The agent burns MORE raw tokens, not fewer.** ~20k per question versus 3,900
-   to read the file directly. The entire win is *where* they are spent: on a cheap
-   model, once, never re-sent. Anyone reading "9-10x cheaper" as "does less work"
-   has it backwards.
-2. **Direct wins for one-shot.** One question at the end of a session: 3,900
-   tokens immediately, versus ~20k plus 8–22 seconds of latency. The crossover is
-   roughly **2–3 turns of remaining session**. Past that, compounding dominates.
-3. **Latency is real and was measured** — 7.9s and 22.4s. Not free, and it is
-   paid on every question.
-4. **The ~4 bytes/token estimate is unverified.** Only byte counts and subagent
-   token totals are measured. Worth checking against a real tokenizer before
-   leaning harder on these figures.
-5. **The 20k-per-run agent cost may be mostly fixed overhead**, not proportional
-   to doc size — both runs cost about the same despite doing different work. If
-   so, the agent gets relatively cheaper as docs grow, and relatively worse for
-   small ones. Not yet tested.
-6. **Two data points is not a sample.** Both runs were on this repo, this corpus,
-   this pair of tasks.
+Two things follow. **Caveat 5's either/or was a false choice** — the cost is
+~6,400 fixed *plus* ~1.04 tokens per document token, so the agent gets relatively
+cheaper as documents grow without ever becoming free. And the **20,000-token
+assumption was too high by 1.7x-2.7x** for a plain `--load`; the earlier 20,331
+and 22,186 measurements were multi-step tasks, not comparable to these.
 
-#### Scenarios still to walk through
+Caveat: three points, two parameters. A close fit is expected and is not by
+itself strong evidence.
 
-- Very short sessions (1–3 turns) — does delegation ever pay?
-- Very long sessions (50+ turns) — does the gap widen as modeled?
-- Many small docs vs. few large ones, given caveat 5
-- Repeat questions about the *same* doc — direct read amortizes, the agent re-pays
-  ~20k every time. This may be where direct actually wins outright.
-- A much larger corpus (10x the docs) — does the startup index stay small enough?
-- Sessions that never touch docs at all — currently paying 270 tokens for nothing
-- Auto-compaction interacting with all of this: compaction may already collapse a
-  large loaded doc, which would weaken the carrying-cost argument. **Unexamined.**
+### Agent path verified against leakage — 2026-08-20
+
+The same three runs double as the first check that the agent does what the whole
+design exists for. All three returned distilled summaries; none reproduced
+document text. The longest identifiers echoed back were names
+(`generic-entity-tab.ejs`, `entity_types`), not prose. Document text stayed in
+the subagent.
+
+This is an observation over three runs, not a test. Nothing in the suite enforces
+it, and nothing prevents a future prompt from producing a verbatim dump.
+
+### What is still not verified
+
+- **The ~4 bytes/token estimate.** No tokenizer is installed and the `claude-api`
+  skill is explicit that `messages.count_tokens` is the right tool and `tiktoken`
+  is not. Resolving it properly means sending the docs to the API, which needs a
+  decision. Bracketed for now:
+
+  | Doc | Bytes | bytes/4 | words x1.3 | words x1.5 |
+  |---|---|---|---|---|
+  | `feature-structure.md` | 15,508 | 3,877 | 2,727 | 3,147 |
+  | `tech-stack.md` | 3,568 | 892 | 609 | 703 |
+  | `uix.md` | 21,254 | 5,313 | 3,887 | 4,485 |
+  | **Total** | **40,330** | **10,082** | **7,224** | **8,335** |
+
+  The two methods differ by ~40%. `feature-structure.md` is 384 of 559 lines
+  inside code fences, which tokenises denser than prose — so bytes/4 is likely
+  closer for that file and likely high for `uix.md` (15 of 246 fenced). Every
+  ratio above moves less than this uncertainty does, since doc size appears on
+  the direct side of every comparison.
+
+- **Whether the cost function generalises beyond this setup.** 17 runs at
+  R^2=0.9997 across three modes is strong within this repo, but it is one corpus,
+  one agent definition, one model. The ~6,400 floor is this agent's system prompt
+  plus tool schemas; it would move if either changed, and it is the term that
+  decides every small-document case.
+- **The input/output token split per run.** `subagent_tokens` is a single total.
+  Dollar figures above are given as a range across plausible splits rather than a
+  point estimate, because the split was never measured.
+
+- **Whether Claude Code's cache behaves as modeled.** The 0.1x/2.0x figures are
+  the API's published pricing. Assuming every carried turn is a clean cache hit
+  is optimistic; any miss moves that scenario toward the no-cache column, which
+  favours the agent.
 
 ---
 
 ## Bugs
 
-### `--analyze <skill> --overwrite` can destroy that skill's manifest — verified
+*(none open)*
 
-`analyze_skill()` writes its output to `${skill_dir}/doc-search.md`. For the
-doc-search skill itself, that path *is* the manifest holding the baseline and
-catalog. Running `--analyze doc-search --overwrite` would replace it with a
-doc-needs file, wiping the SessionStart configuration.
+### Fixed 2026-08-20
 
-Verified by running the preview (no `--overwrite`), which reports that exact
-target path. Not triggered destructively.
-
-The root cause is one filename serving two purposes: `doc-search.md` means
-"manifest" inside the doc-search skill and "docs this skill needs" everywhere
-else. Same shape as the baseline bug already fixed in `update_manifest()`.
-
-Options: rename the generated file (`doc-needs.md`), rename the manifest, or
-refuse to analyze the doc-search skill.
-
-### Ambiguous doc names resolve silently — suspected
-
-`find_doc()` falls back to `find "${DOCS_DIR}" -name "*${name}*" | head -1`.
-With two docs matching a partial name, the first wins and nothing warns. As the
-docs folder grows this gets more likely, and a wrong-but-plausible doc is worse
-than a miss. Consider erroring on multiple matches, or reporting which was
-chosen.
+- **`--analyze <skill> --overwrite` could destroy the manifest.** `analyze_skill()`
+  wrote `${skill_dir}/doc-search.md`, which inside `skills/doc-search/` *is* the
+  manifest. Generated files are now `doc-needs.md`. Regression test:
+  `analyzing doc-search keeps manifest`.
+- **Ambiguous doc names resolved silently.** `find_doc()` took `head -1` of the
+  recursive search. It now returns status 2, lists every candidate on stderr, and
+  emits no document. Exact matches still win before the recursive search runs.
+  Regression tests: `ambiguous name reports candidates`, `exact match beats
+  ambiguity`, `ambiguity does not block siblings`.
+- **Empty scans reported "Found 1".** `echo "" | wc -l` is 1. Added `count_lines()`.
+- **`--analyze` complained on stderr** when `docs/features/` did not exist.
+- **`--summary` returned only the document's title.** `get_summary()` ended with
+  `sed '/^$/q'`, which quits at the first blank line — in markdown the one after
+  the H1. Every document summarised to its own heading, while `SKILL.md`,
+  `README.md`, and the function's own comment all promised a first paragraph.
+  Replaced with an `awk` pass that keeps the leading heading, skips blanks and
+  any further headings, then prints to the next blank. Test: `load --summary`.
+- **`MANIFEST` pointed at `.claude/doc-search.md`**, a path that has never
+  existed, and was unused. Repointed at the real manifest and now used by
+  `update_manifest()` instead of a duplicated literal.
 
 ---
 
 ## Untested
 
-- **`--analyze` has never been run with `--overwrite`.** Preview works; the write
-  path is unexercised — and per the bug above, should not be run against
-  `doc-search` until that is resolved.
-- **Empty-category paths in `--update`.** `Features` and `Other Documentation`
-  have been empty on every run so far, so those branches have only ever produced
-  empty sections. Untested against real content.
-- **No tests exist** for `doc-search.sh`. The two bugs found so far were both
-  found by hand, one of them only by running the real thing. A small fixture repo
-  plus a handful of assertions would have caught both.
+*(previously listed items are now covered)*
+
+`tests/doc-search.test.sh` — 30 cases across all three modes plus
+`load-baseline.sh`. Each builds a throwaway git repo under `$TMPDIR`. All pass.
+
+Verified load-bearing: each fix was reverted in a scratch copy and the suite
+caught every one — including the pre-existing `--update` baseline fix, which had
+no test before.
+
+| Reverted fix | Cases that fail |
+|---|---|
+| `--analyze` writes `doc-search.md` | 5 |
+| `find_doc` takes `head -1` | 2 |
+| `--summary` `sed '/^$/q'` | 1 |
+| empty scan `wc -l` | 2 |
+| `--update` drops baseline | 1 |
+
+Now covered that was not before: the `--analyze --overwrite` write path, the
+`Features` branch of `--update` against real content, the `Other Documentation`
+branch, and both branches empty.
+
+Still uncovered:
+- **GNU sed.** `analyze_skill()` uses BSD `sed -i ''` and will fail on Linux.
+  Noted in `README.md`; no test, because the test host is macOS.
+- **Docs with spaces in filenames.** Not tested anywhere.
+- **The agent path itself.** Tests exercise the script; nothing tests that the
+  subagent reports back without leaking document text, which is the actual
+  product.
 
 ---
 
 ## Gaps
 
-- **`docs/features/` does not exist.** `feature-structure.md` specifies a whole
-  per-feature layout that nothing in this repo uses. Until something does, the
-  conditional-loading paths in `--analyze` point at directories that aren't there.
-- **No second skill.** The design intends skills to declare their doc needs in a
-  `doc-search.md` and have the agent fetch them. That path is documented in
-  `SKILL.md` and `README.md` but has never run, because doc-search is the only
-  skill here. Building one real consumer would validate the pattern.
-- **Adopters may hit permission prompts.** The rule allowing
-  `Bash(./.claude/skills/doc-search/doc-search.sh *)` lives in
-  `.claude/settings.local.json`, which is gitignored. Someone cloning this repo
-  gets the skill but not the permission. Moving it to the committed
-  `.claude/settings.json` would fix that — but project settings are shared and
-  trusted differently, so it is a deliberate call, not an oversight to silently
-  correct.
+- **`docs/features/` does not exist.** `feature-structure.md` specifies a
+  per-feature layout nothing in this repo uses, so `--analyze`'s
+  conditional-loading paths point at directories that aren't there. The `--update`
+  Features branch is now covered by a fixture instead. Declined 2026-08-20 —
+  no new content this pass.
+- **No second skill.** The pattern where a skill declares its needs in
+  `doc-needs.md` and the agent fetches them is documented but has never run.
+  Declined 2026-08-20: one skill and one agent is the intended footprint.
 
 ---
 
@@ -199,6 +511,10 @@ chosen.
 
 - **Hook changes need a session restart** to take effect. The settings watcher
   only picks up `.claude/` when a settings file was present at session start.
-  This applies to anyone pulling the repo for the first time too.
+  Now documented in `SKILL.md`'s install steps.
 - **`README.md` describes `docs/standards/` as a sample corpus.** If this repo
   ever adopts those standards for itself, that framing needs updating.
+- **Permissions moved to committed `.claude/settings.json`** (2026-08-20), so a
+  clone works without each person adding the rule. `.gitignore` still excludes
+  `settings.local.json`; no such file exists in the repo. Note the rule syntax is
+  `Bash(<prefix>:*)` — colon, not the space this file previously showed.

@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(./.claude/skills/doc-search/doc-search.sh:*)",
+      "Bash(./.claude/skills/doc-search/load-baseline.sh:*)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {

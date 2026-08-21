@@ -12,7 +12,7 @@ Load specific documentation based on skill needs.
 ```
 
 ### Generate Mode
-Analyze a skill and auto-generate its `doc-search.md` file.
+Analyze a skill and auto-generate its `doc-needs.md` file.
 
 ```bash
 /doc-search --analyze my-skill --overwrite

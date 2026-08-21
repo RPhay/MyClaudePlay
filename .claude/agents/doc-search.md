@@ -2,6 +2,10 @@
 name: doc-search
 description: ALWAYS use this instead of reading, grepping, or globbing files under docs/ yourself - it answers from the docs while keeping their full text out of your context. Use it to answer any question that project documentation would settle, including when you only have a partial doc name or are unsure a relevant doc exists; also for refreshing the doc manifest (--update) and generating a skill's doc needs (--analyze). Read docs/ directly ONLY when the user names a specific file and wants its contents, or when you are editing one. Wait for this agent's actual returned result before acting on it - never predict or describe what it will report.
 tools: Bash, Read
+# Load-bearing. Measured 2026-08-20: delegation is worth 5.38x on Haiku 4.5,
+# 1.25x on Opus 5, and 0.64x on Fable 5 -- i.e. it LOSES money above the
+# Haiku tier, because the run cost outgrows the context it saves.
+# Do not change or override without re-measuring. See CLAUDE-TODO.md.
 model: haiku
 ---
 

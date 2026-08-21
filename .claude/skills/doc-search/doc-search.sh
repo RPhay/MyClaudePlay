@@ -8,7 +8,7 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
 DOCS_DIR="${REPO_ROOT}/docs"
 CLAUDE_DIR="${REPO_ROOT}/.claude"
-MANIFEST="${CLAUDE_DIR}/doc-search.md"
+MANIFEST="${CLAUDE_DIR}/skills/doc-search/doc-search.md"
 
 # Parse arguments
 MODE="load"
@@ -52,10 +52,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Helper: Count non-empty lines. `echo "" | wc -l` says 1, which made empty
+# scans report "Found 1".
+count_lines() {
+  if [[ -z "$1" ]]; then
+    echo 0
+  else
+    printf '%s\n' "$1" | wc -l | tr -d ' '
+  fi
+}
+
 # Helper: Find a document file by name
 find_doc() {
   local name="$1"
-  local found=""
 
   # Search in docs directory with exact match
   if [[ -f "${DOCS_DIR}/${name}" ]]; then
@@ -71,13 +80,43 @@ find_doc() {
     fi
   fi
 
-  # Recursive search in docs directory
-  found=$(find "${DOCS_DIR}" -name "*${name}*" -type f 2>/dev/null | head -1)
-  if [[ -n "$found" ]]; then
-    echo "$found"
-    return 0
+  # Recursive search in docs directory. More than one match is ambiguous --
+  # silently taking the first can return a wrong-but-plausible doc, which is
+  # worse than a miss. Report the candidates and fail with status 2.
+  local matches count=0
+  matches=$(find "${DOCS_DIR}" -name "*${name}*" -type f 2>/dev/null | sort)
+  if [[ -n "$matches" ]]; then
+    count=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
   fi
 
+  if [[ "$count" -eq 1 ]]; then
+    echo "$matches"
+    return 0
+  elif [[ "$count" -gt 1 ]]; then
+    {
+      echo "Error: ambiguous document name '${name}' matches ${count} files:"
+      printf '%s\n' "$matches" | sed 's|^|  |'
+      echo "Narrow the name, or give the path relative to docs/."
+    } >&2
+    return 2
+  fi
+
+  return 1
+}
+
+# Helper: Resolve a doc name and report why it failed. find_doc returns 2 for an
+# ambiguous name, having already explained itself -- only a genuine miss needs a
+# message here.
+resolve_doc() {
+  local name="$1" path rc=0
+  path=$(find_doc "$name") || rc=$?
+  if [[ $rc -eq 0 ]]; then
+    echo "$path"
+    return 0
+  fi
+  if [[ $rc -ne 2 ]]; then
+    echo "Warning: Document not found: $name" >&2
+  fi
   return 1
 }
 
@@ -91,8 +130,17 @@ get_summary() {
   echo "File: $file"
   echo "Size: $(wc -c < "$file") bytes"
   echo "---"
-  # Extract first paragraph or first 5 lines
-  head -20 "$file" | sed '/^$/q'
+  # Heading, then the first real paragraph. `sed '/^$/q'` used to be here, but it
+  # quits at the FIRST blank line -- in markdown that is the one after the H1, so
+  # every doc summarised to its own title.
+  awk '
+    NR == 1 && /^#/ { print; next }          # leading heading
+    !started && /^[[:space:]]*$/ { next }    # skip blanks before the paragraph
+    !started && /^#/ { next }                # ...and any further headings
+    /^[[:space:]]*$/ { exit }                # blank after it ends the paragraph
+    { started = 1; print }
+    NR > 40 { exit }                         # bound the output
+  ' "$file"
 }
 
 # Mode: Load documentation
@@ -106,43 +154,37 @@ load_docs() {
     full)
       for doc in "${DOC_ARRAY[@]}"; do
         doc=$(echo "$doc" | xargs)  # trim whitespace
-        if doc_path=$(find_doc "$doc"); then
+        if doc_path=$(resolve_doc "$doc"); then
           echo "### Document: $doc"
           echo ""
           cat "$doc_path"
           echo ""
           echo "---"
           echo ""
-        else
-          echo "Warning: Document not found: $doc" >&2
         fi
       done
       ;;
     summary)
       for doc in "${DOC_ARRAY[@]}"; do
         doc=$(echo "$doc" | xargs)
-        if doc_path=$(find_doc "$doc"); then
+        if doc_path=$(resolve_doc "$doc"); then
           get_summary "$doc_path"
           echo ""
-        else
-          echo "Warning: Document not found: $doc" >&2
         fi
       done
       ;;
     refs)
       for doc in "${DOC_ARRAY[@]}"; do
         doc=$(echo "$doc" | xargs)
-        if doc_path=$(find_doc "$doc"); then
+        if doc_path=$(resolve_doc "$doc"); then
           echo "- **$doc**: $(grep -m1 '^#' "$doc_path" 2>/dev/null | sed 's/^# //')"
-        else
-          echo "Warning: Document not found: $doc" >&2
         fi
       done
       ;;
   esac
 }
 
-# Mode: Analyze a skill and generate doc-search.md
+# Mode: Analyze a skill and generate doc-needs.md
 analyze_skill() {
   local skill_name="$1"
   local skill_dir="${CLAUDE_DIR}/skills/${skill_name}"
@@ -175,9 +217,9 @@ analyze_skill() {
   # Scan repo for available docs
   echo "Scanning repo for documentation..."
   local standards_docs=$(find "${DOCS_DIR}/standards" -name "*.md" -type f 2>/dev/null | xargs -I {} basename {} | sort)
-  local features=$(find "${DOCS_DIR}/features" -maxdepth 1 -type d | tail -n +2 | xargs -I {} basename {})
-  echo "Found $(echo "$standards_docs" | wc -l) standard docs"
-  echo "Found $(echo "$features" | wc -l) features"
+  local features=$(find "${DOCS_DIR}/features" -maxdepth 1 -type d 2>/dev/null | tail -n +2 | xargs -I {} basename {})
+  echo "Found $(count_lines "$standards_docs") standard docs"
+  echo "Found $(count_lines "$features") features"
   echo ""
 
   # Build intelligent recommendations
@@ -221,12 +263,14 @@ analyze_skill() {
     conditional_docs+=("docs/features/[feature-name]/feature.md")
   fi
 
-  # Generate doc-search.md content
-  local output_file="${skill_dir}/doc-search.md"
+  # Generate doc-needs.md content. Deliberately NOT doc-search.md: inside the
+  # doc-search skill that filename is the manifest, and writing here would
+  # destroy the baseline and catalog.
+  local output_file="${skill_dir}/doc-needs.md"
   local temp_file=$(mktemp)
 
   cat > "$temp_file" << 'EOF'
-# Doc Search: [SKILL_NAME]
+# Doc Needs: [SKILL_NAME]
 
 Documents this skill needs to function effectively.
 
@@ -266,7 +310,7 @@ EOF
   sed -i '' "s/\[SKILL_NAME\]/$skill_name/" "$temp_file"
 
   # Show what will be written
-  echo "Generated doc-search.md:"
+  echo "Generated doc-needs.md:"
   echo "---"
   cat "$temp_file"
   echo "---"
@@ -287,7 +331,7 @@ update_manifest() {
   echo "Scanning repository for documentation..."
   echo ""
 
-  local manifest_file="${CLAUDE_DIR}/skills/doc-search/doc-search.md"
+  local manifest_file="$MANIFEST"
   local temp_manifest=$(mktemp)
 
   # Preserve the configured baseline -- this rewrites the whole manifest, so
@@ -315,7 +359,7 @@ Load specific documentation based on skill needs.
 ```
 
 ### Generate Mode
-Analyze a skill and auto-generate its `doc-search.md` file.
+Analyze a skill and auto-generate its `doc-needs.md` file.
 
 ```bash
 /doc-search --analyze my-skill --overwrite
