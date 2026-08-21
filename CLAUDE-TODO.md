@@ -463,34 +463,28 @@ it, and nothing prevents a future prompt from producing a verbatim dump.
 
 ## Untested
 
-*(previously listed items are now covered)*
+**There are no tests.** The suite written earlier this session was deleted on
+2026-08-20 at the user's instruction, along with a benchmark harness that had
+been generated in a prior session without approval. A replacement set has not
+been scoped yet.
 
-`tests/doc-search.test.sh` — 30 cases across all three modes plus
-`load-baseline.sh`. Each builds a throwaway git repo under `$TMPDIR`. All pass.
+What this means concretely: the five bugs listed above are fixed in
+`doc-search.sh`, but nothing guards them. Each was verified by hand at the time
+of the fix and each had a regression test before the deletion, so the fixes
+themselves are sound — they are simply unprotected against future edits.
 
-Verified load-bearing: each fix was reverted in a scratch copy and the suite
-caught every one — including the pre-existing `--update` baseline fix, which had
-no test before.
+Specific things a replacement suite would need to cover:
 
-| Reverted fix | Cases that fail |
-|---|---|
-| `--analyze` writes `doc-search.md` | 5 |
-| `find_doc` takes `head -1` | 2 |
-| `--summary` `sed '/^$/q'` | 1 |
-| empty scan `wc -l` | 2 |
-| `--update` drops baseline | 1 |
-
-Now covered that was not before: the `--analyze --overwrite` write path, the
-`Features` branch of `--update` against real content, the `Other Documentation`
-branch, and both branches empty.
-
-Still uncovered:
-- **GNU sed.** `analyze_skill()` uses BSD `sed -i ''` and will fail on Linux.
-  Noted in `README.md`; no test, because the test host is macOS.
-- **Docs with spaces in filenames.** Not tested anywhere.
-- **The agent path itself.** Tests exercise the script; nothing tests that the
-  subagent reports back without leaking document text, which is the actual
-  product.
+- The five fixed bugs, so they cannot silently return.
+- The `--analyze --overwrite` write path.
+- `--update`'s `Features` and `Other Documentation` branches, both populated and
+  empty.
+- **The agent path**, which has never been tested at all — that the subagent
+  returns correct answers and does not leak document text into the caller's
+  context. This is the actual product and it remains the largest gap.
+- GNU `sed` portability: `analyze_skill()` uses BSD `sed -i ''` and will fail on
+  Linux.
+- Documents with spaces in their filenames.
 
 ---
 

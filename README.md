@@ -46,7 +46,6 @@ Four parts, each doing one thing:
 | **Skill** | `.claude/skills/doc-search/SKILL.md` | `/doc-search` slash command; runs the script inline |
 | **Agent** | `.claude/agents/doc-search.md` | Runs the script in a subagent and reports back distilled |
 | **Hook** | `SessionStart` in `.claude/settings.json` | Emits the doc index and the delegation rules at startup |
-| **Tests** | `tests/doc-search.test.sh` | Fixture-repo suite covering all three modes |
 
 One script, two callers. The agent doesn't carry its own copy — two copies of the
 same 9.5KB script would drift silently.
@@ -145,8 +144,6 @@ docs/
     ├── feature-structure.md
     ├── tech-stack.md
     └── uix.md
-tests/
-└── doc-search.test.sh               fixture-repo test suite
 CLAUDE.md                            project instructions
 CHANGELOG.md
 ```

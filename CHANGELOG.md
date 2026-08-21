@@ -9,11 +9,6 @@ This repo has no commits yet, so everything below is unreleased.
 
 ### Added
 
-- **Test suite** (`tests/doc-search.test.sh`) — 28 cases over all three modes and
-  `load-baseline.sh`. Each builds a throwaway git repo under `$TMPDIR` and copies
-  the real scripts into it. Includes regression cases for both bugs fixed below.
-  All 30 pass, and each fix was verified by reverting it and confirming the
-  suite catches it.
 - **Ambiguity reporting in `find_doc()`.** A partial name matching more than one
   document now lists every candidate on stderr and returns status 2 instead of
   silently resolving to the first match.

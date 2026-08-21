@@ -137,16 +137,6 @@ picks up `.claude/` when a settings file was present at session start. A repo
 that had no `.claude/settings.json` before you added one will not run the hook
 until the next session.
 
-## Tests
-
-```bash
-./tests/doc-search.test.sh            # all
-./tests/doc-search.test.sh ambiguous  # filter by name
-```
-
-Each test builds a throwaway git repo under `$TMPDIR` and copies the real
-scripts into it, so nothing touches the working repository.
-
 ## Configuration
 
 Edit baseline docs in `./.claude/skills/doc-search/doc-search.md`:
