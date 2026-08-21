@@ -55,6 +55,11 @@ This repo has no commits yet, so everything below is unreleased.
 
 ### Known issues
 
+See [CLAUDE-TODO.md](CLAUDE-TODO.md) for the full list. Notably:
+
+- `--analyze doc-search --overwrite` would overwrite the doc-search manifest,
+  since `analyze_skill()` writes to `<skill>/doc-search.md` and that path is the
+  manifest for this particular skill. Not yet fixed.
 - `/doc-search` still runs the skill inline, so its output lands in the caller's
   context. Only the agent path keeps documents out.
 - Hook changes require a restart; the settings watcher only picks up `.claude/`
