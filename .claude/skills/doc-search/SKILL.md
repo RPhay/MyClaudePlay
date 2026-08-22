@@ -1,3 +1,9 @@
+---
+name: doc-search
+description: Loads, updates, and analyses project documentation under docs/. Slash-command only — routine docs/ questions should go to the doc-search agent, which answers from the docs while keeping their full text out of the session. Use this inline path when you deliberately want the raw document text in the current context.
+disable-model-invocation: true
+---
+
 # Doc Search
 
 Discover, load, and manage project documentation efficiently.
