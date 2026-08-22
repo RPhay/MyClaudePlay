@@ -14,8 +14,12 @@ Every defect this checks was found in a real community skill collection. See
 ## Run it
 
 ```
-python3 "$(git rev-parse --show-toplevel)/.claude/skills/skill-lint/scripts/lint.py" --scope all --root "$PWD"
+python3 "$(git rev-parse --show-toplevel)/.claude/skills/skill-lint/scripts/lint.py" --scope project --root "$PWD"
 ```
+
+Default to `--scope project`. `--scope all` includes every installed plugin and
+on a well-stocked machine emits more than is readable in one pass — ask for it
+only when the question is actually about the user's whole installation.
 
 **If that command cannot run — Bash denied, python3 missing, script not found —
 report that and stop.** Do not read the skill files by hand and describe them
@@ -70,6 +74,11 @@ Class 3 is never applied.
    `allowed-tools` above grants nothing and restricts nothing — the dialog is the
    only real control.
 3. **Refuse unversioned files without `--force`.**
+   Note that every file this skill fixes lives under `.claude/`, and Claude Code
+   gates writes there behind a permission separate from ordinary file writes. If
+   the edits are declined, say that the fixes are prepared and awaiting that
+   approval — do not report the run as failed, and do not try to route around it
+   with Bash.
 4. **Re-run the lint after each write** and confirm the findings cleared.
 5. **Never stop to ask which remedy to use.** Every class 1 and 2 finding has one
    prescribed fix above. Record judgment calls in the summary instead.

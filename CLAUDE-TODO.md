@@ -568,6 +568,10 @@ skill that invokes tools:
   directory**, not the session cwd: `./probe-out.txt` was proposed as
   `.claude/skills/writeprobe/probe-out.txt`. Skill bodies should use explicit
   paths.
+- **Writes under `.claude/` are gated separately from ordinary file writes**, and
+  `--permission-mode acceptEdits` does **not** cover them. Any skill whose fixes
+  land in `.claude/` will appear to fail unless that permission is granted; it
+  should report the fixes as prepared rather than as failed.
 
 ### Not verified
 
