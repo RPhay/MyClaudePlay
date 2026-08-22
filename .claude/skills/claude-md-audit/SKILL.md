@@ -30,6 +30,11 @@ whole point of this skill is that its numbers come from somewhere checkable.
 `CLAUDE.md` loads only when the cwd is inside its subtree, so cost is per
 directory, not per repo. `--json` emits the same data for scripting.
 
+**`--apply` is an argument to this skill, not to the script.** `graph.py` only
+ever reports; it takes `--root`, `--dir` and `--json` and nothing else. Passing
+`--apply` to it fails. You perform the fixes yourself with `Edit`, following the
+procedure below.
+
 ## Reading the report
 
 Two blocks, deliberately separated.
