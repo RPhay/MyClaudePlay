@@ -498,9 +498,9 @@ and a correctness hazard: naming a file in an instruction loads it.
 **Rows 3 and 12 together are a silent-failure class.** An import past hop 5, or one
 whose target moved, is present and referenced and never loads. Nothing signals it.
 
-**Row 15 has real reach.** A single `CLAUDE.md` at `/Users/aslynn/Code/` would load
-into every project beneath it — this repo, `MyWork`, everything — invisibly, on
-every turn. No root-scoped tool can find that.
+**Row 15 has real reach.** A single `CLAUDE.md` at `~/Code/` would load into every
+project beneath it — this repo and every sibling — invisibly, on every turn. No
+root-scoped tool can find that.
 
 **Row 5 dictates the walker.** Resolving relative imports against the project root
 instead of the importing file produces a wrong graph and wrong costs.
