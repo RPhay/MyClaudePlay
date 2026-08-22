@@ -621,28 +621,36 @@ skill that invokes tools:
 
 ## Untested
 
-**There are no tests.** The suite written earlier this session was deleted on
-2026-08-20 at the user's instruction, along with a benchmark harness that had
-been generated in a prior session without approval. A replacement set has not
-been scoped yet.
+**Tests exist again, and both suites pass.** `tests/` was removed from git in
+8608c7b while staying on disk; it was re-tracked on 2026-08-22 after being run
+rather than assumed. `tests/README.md` documents both.
 
-What this means concretely: the five bugs listed above are fixed in
-`doc-search.sh`, but nothing guards them. Each was verified by hand at the time
-of the fix and each had a regression test before the deletion, so the fixes
-themselves are sound — they are simply unprotected against future edits.
+| Suite | Cases | Covers |
+|---|---|---|
+| `tests/unit/doc-search.test.sh` | 29 | all three modes, `load-baseline.sh`, and the five fixed bugs |
+| `tests/unit/skills.test.py` | 52 | the ten skill scripts under `.claude/skills/*/scripts/` |
 
-Specific things a replacement suite would need to cover:
+Four of the six items this section previously listed as needed are now covered:
+the five fixed bugs, the `--analyze --overwrite` write path, `--update`'s
+`Features` and `Other Documentation` branches both populated and empty, and
+documents with spaces in their filenames.
 
-- The five fixed bugs, so they cannot silently return.
-- The `--analyze --overwrite` write path.
-- `--update`'s `Features` and `Other Documentation` branches, both populated and
-  empty.
-- **The agent path**, which has never been tested at all — that the subagent
-  returns correct answers and does not leak document text into the caller's
-  context. This is the actual product and it remains the largest gap.
-- GNU `sed` portability: `analyze_skill()` uses BSD `sed -i ''` and will fail on
-  Linux.
-- Documents with spaces in their filenames.
+The skills suite was checked by mutation rather than by watching it pass:
+reverting the list-continuation fix, dropping the minimum-hop filter, and
+removing `requestId` dedupe each fail their own case and nothing else.
+
+### Still not covered
+
+- **The agent path.** That the subagent returns correct answers and does not leak
+  document text into the caller's context. This is the actual product and it
+  remains the largest gap — an observation over three runs on 2026-08-20 is not a
+  test, and nothing enforces it.
+- **GNU `sed` portability.** `analyze_skill()` uses BSD `sed -i ''` and will fail
+  on Linux. No suite runs on Linux, so this would not be caught.
+- **The skills' `--apply` paths.** All four were exercised by hand end to end and
+  found six defects between them, but the unit suite covers only the pure logic.
+  Exercising an apply path needs a live session, which belongs in `tests/bench/`
+  if it is ever automated.
 
 ---
 
@@ -653,9 +661,22 @@ Specific things a replacement suite would need to cover:
   conditional-loading paths point at directories that aren't there. The `--update`
   Features branch is now covered by a fixture instead. Declined 2026-08-20 —
   no new content this pass.
-- **No second skill.** The pattern where a skill declares its needs in
-  `doc-needs.md` and the agent fetches them is documented but has never run.
-  Declined 2026-08-20: one skill and one agent is the intended footprint.
+- **The `doc-needs.md` pattern has still never run.** A skill declares its
+  documentation needs and the agent fetches them; documented, never exercised.
+  The 2026-08-20 note that "one skill and one agent is the intended footprint"
+  no longer holds — there are ten skills as of 2026-08-22 — but none of the nine
+  new ones declare doc needs, because none of them read `docs/`. The pattern
+  is still unexercised for a different reason than before.
+- **Two unverified graph items are one canary run each.** Load order (rule 22 is
+  observed, not proven — the model may have sorted its own output) and whether the
+  depth limit counts files or hops in a topology other than the chain and diamond
+  already tested. Both use the fixture-and-canary method recorded above; neither
+  has been scheduled. The third unverified item, enterprise/managed-policy scope,
+  needs admin rights and stays open.
+- **The token-optimization skills are unpushed.** Nine skills, their tests and
+  the measured findings sit on `doc-search-fixes-and-cost-model`, 24 commits
+  ahead of `main` and never pushed. Nothing is lost, but nothing is backed up
+  either.
 
 ---
 
