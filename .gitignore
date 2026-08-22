@@ -7,3 +7,6 @@
 # Python artefacts
 __pycache__/
 *.pyc
+
+# Benchmark working output (tests/README.md: "delete it freely")
+.bench/
