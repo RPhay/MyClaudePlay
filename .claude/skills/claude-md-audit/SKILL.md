@@ -21,6 +21,11 @@ python3 "$(git rev-parse --show-toplevel)/.claude/skills/claude-md-audit/scripts
 Use an explicit `--root`. Never a bare relative path: a relative path inside a
 skill body resolves against the skill's own directory, not the session cwd.
 
+**If that command cannot run — Bash denied, python3 missing, script not found —
+report that and stop.** Do not read the files by hand and describe the graph
+yourself. A hand-read graph looks identical to a measured one and is not one; the
+whole point of this skill is that its numbers come from somewhere checkable.
+
 `--dir <path>` audits a different working directory. This matters — a nested
 `CLAUDE.md` loads only when the cwd is inside its subtree, so cost is per
 directory, not per repo. `--json` emits the same data for scripting.
@@ -48,7 +53,7 @@ every turn after (cache read).
 |---|---|---|
 | Dead import — target missing | Fix the path or delete the line | 1 |
 | Tilde import — `@~/…` never resolves | Replace with an absolute path, or delete | 1 |
-| Accidental import — `@x.md` mid-sentence in prose | Wrap in backticks to neutralise, or confirm it was meant | 1 |
+| Accidental import — `@x.md` mid-sentence in prose | Wrap in backticks to neutralise. Note in the summary that it may have been deliberate; do not stop to ask | 1 |
 | Unreachable import — minimum hop ≥ 5 | Re-parent onto a shallower node, or delete | 2 |
 | Duplicated instruction across nodes | Delete from the lower-precedence node | 2 |
 | Node outside the repo | Report only. It costs every project on this machine | 3 |
@@ -75,6 +80,10 @@ Class 3 is never applied.
    case that matters: it is usually untracked and has no undo.
 4. **Re-run the walk after each write.** Every finding in that batch must clear.
    Revert and report any that does not.
+5. **Never stop to ask which remedy to use.** Every class 1 and class 2 finding
+   has exactly one prescribed fix in the table above. Apply it, and record any
+   judgment call in the summary. Questions belong after the batch, not instead
+   of it.
 
 ## References
 

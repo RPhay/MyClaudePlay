@@ -35,7 +35,7 @@ Applied by `--apply`.
 |---|---|
 | Dead import | If exactly one file of that basename exists under the importing file's directory, rewrite the path to it. Otherwise delete the line and report the deletion. |
 | Tilde import | Rewrite `@~/x` to the expanded absolute path if the target exists; otherwise delete the line. |
-| Accidental prose import | Wrap the token in backticks — `` @x.md `` — which suppresses the import while leaving the sentence readable. Never delete the sentence. |
+| Accidental prose import | Wrap the token in backticks — `` @x.md `` — which suppresses the import while leaving the sentence readable. Never delete the sentence. Do not ask whether the import was deliberate: apply the fix and say in the summary that it can be reverted if it was. |
 
 Backticks are the correct neutraliser because inline code spans are verified to
 suppress imports (rule 9). Do not indent the line or fence it; both change how the
