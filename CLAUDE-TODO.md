@@ -524,6 +524,21 @@ measured across the real `skill_listing` attachments in this machine's
 transcripts. With the flag set the always-on cost is exactly zero, and the model
 cannot know the skill exists.
 
+**A skill's identity is its directory name, not its `name` field.** A skill in
+`dirname-alpha/` declaring `name: namefield-beta` was listed and invoked as
+`dirname-alpha`, while its `description` was still read from the frontmatter.
+
+> **Correction.** The 2026-08-21 hand audit of `../OtherClaudeSkills/Claude-Skills`
+> reported that `one-skill-to-rule-them-all` declaring `name: task-observer`
+> collided with the separate `task-observer/` skill. It does not. The `name` field
+> is inert for identity, so the two never conflict. The divergence is still worth
+> fixing as documentation, but it is not the defect it was called.
+
+A consequence for the same collection: a skill with no frontmatter at all is
+still invocable as `/<directory>`. It simply has no description and so can never
+auto-trigger. That may be deliberate — this repo's own `doc-search` skill has no
+frontmatter and is documented as intentionally slash-only.
+
 **`allowed-tools` in `SKILL.md` is declarative, not enforcing** — in both
 non-interactive and interactive mode. Non-interactive arms pre-approved only
 `Skill`; interactive arms were driven through a PTY harness.
