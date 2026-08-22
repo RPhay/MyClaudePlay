@@ -3,7 +3,7 @@
 Open work on this repo. Items are marked **verified** (I reproduced it) or
 **suspected** (reasoned from the code, not yet triggered).
 
-Last worked: 2026-08-20.
+Last worked: 2026-08-21.
 
 ---
 
@@ -429,6 +429,141 @@ it, and nothing prevents a future prompt from producing a verbatim dump.
   the API's published pricing. Assuming every carried turn is a clean cache hit
   is optimistic; any miss moves that scenario toward the no-cache column, which
   favours the agent.
+
+---
+
+## The CLAUDE.md instruction graph — measured 2026-08-21
+
+Gathered while designing a `claude-md-audit` skill. Nothing here is reasoned from
+documentation or memory; every row was triggered on this machine.
+
+**Method.** Each file in a fixture tree carries a unique `CANARY-X` string. A
+non-interactive run then asks which canaries are visible in its instructions, so
+one run resolves several hypotheses at once. Absence of a canary is the negative
+result. Roughly 25 runs, ~$0.25 total.
+
+```
+claude -p '<canary question>' --model haiku --tools "" \
+       --output-format json --no-session-persistence --max-budget-usd 0.10
+```
+
+Claude Code 2.1.239. Fixtures were built under the session scratchpad and are not
+in this repo; they cover every row below and are worth rebuilding if any of this
+needs re-testing.
+
+### Verified behaviours
+
+| # | Behaviour | Result |
+|---|---|---|
+| 1 | `@file.md` in a `CLAUDE.md` | Imports the file |
+| 2 | Imports of imports | **Transitive** |
+| 3 | Depth limit | Minimum hop ≤ 4 loads; **hop 5 silently does not** |
+| 4 | `@sub/g.md`, `@./sub/h.md`, `@/abs/path.md` | All three forms import |
+| 5 | Resolution base for a nested import | **The importing file's own directory**, not the project root |
+| 6 | `@~/path.md` | **Never resolves.** Target existed; `~` is not expanded |
+| 7 | Inside a ``` fence | Suppressed |
+| 8 | Inside a `~~~` fence | Suppressed |
+| 9 | Inside an inline code span | Suppressed |
+| 10 | Inside a 4-space indented block | Suppressed — **only when it is a true code block**; see 23 |
+| 11 | Mid-sentence in prose — "See @inline.md for details." | **Imports.** Almost certainly never intended |
+| 12 | Import target missing | **Silent.** No error, no warning |
+| 13 | Cycle `a → b → a` | Terminates; both load once |
+| 14 | Diamond, target at hop 5 one way and hop 2 another | Loads, once. **Minimum hop wins** |
+| 15 | Ancestor walk | Every ancestor directory from `/` down to cwd. **Does not stop at the git root.** No depth cap — 11 levels loaded |
+| 16 | Nested `sub/CLAUDE.md`, cwd at project root | **Not loaded** |
+| 17 | Nested `sub/CLAUDE.md`, cwd inside `sub/` | Loaded, **and so is every ancestor** |
+| 18 | Nested `sub/CLAUDE.md` when a file in `sub/` is Read from the parent cwd | **Not loaded.** cwd decides, not file access. *One run* |
+| 19 | `--add-dir <dir>` | Does **not** bring that directory's `CLAUDE.md` into the graph |
+| 20 | `~/.claude/CLAUDE.md` from an unrelated directory | Always loads |
+| 21 | `CLAUDE.local.md` | Loads alongside `CLAUDE.md` |
+| 22 | Load order | Observed outermost-first, innermost-last — **observed, not proven**; the model could have sorted its own output |
+| 23 | 4-space indent that is a **list continuation** | **Imports.** Not treated as a code block |
+| 24 | 2-space indent | Imports — too shallow to be a code block |
+| 25 | Inside a blockquote, `> @x.md` | Imports |
+
+Row 1 was run twice and reproduced identically.
+
+**Rows 10 and 23 together settle the parsing question.** Claude Code does real
+markdown parsing, not naive indent-stripping: an identical four-space indent is a
+code block after a paragraph and a continuation after a list item, and it imports
+only in the second case. Any tool that skips every indented line silently misses
+real imports.
+
+### Consequences worth acting on
+
+**Row 11 is the sleeper.** Any prose sentence anywhere in the graph containing
+`@something.md` silently pulls that file into every turn. It is both a hidden cost
+and a correctness hazard: naming a file in an instruction loads it.
+
+**Rows 3 and 12 together are a silent-failure class.** An import past hop 5, or one
+whose target moved, is present and referenced and never loads. Nothing signals it.
+
+**Row 15 has real reach.** A single `CLAUDE.md` at `/Users/aslynn/Code/` would load
+into every project beneath it — this repo, `MyWork`, everything — invisibly, on
+every turn. No root-scoped tool can find that.
+
+**Row 5 dictates the walker.** Resolving relative imports against the project root
+instead of the importing file produces a wrong graph and wrong costs.
+
+**Rows 7–10 mean the walker must be fence-aware**, or documentation examples get
+counted as live imports and every figure inflates.
+
+### Skill frontmatter mechanics — measured 2026-08-21
+
+**`disable-model-invocation: true` removes the skill from the listing entirely.**
+
+| Arm | Total prompt tokens | Description text reached the model |
+|---|---|---|
+| Control, no skill present | 9,513 | — |
+| Skill, no flag | 9,546 | **yes** |
+| Skill, `disable-model-invocation: true` | 9,513 | no |
+
+A listed skill costs tokens proportional to its description — 33 tokens for a
+120-character one here, consistent with the ~424 chars / ~118 tokens per skill
+measured across the real `skill_listing` attachments in this machine's
+transcripts. With the flag set the always-on cost is exactly zero, and the model
+cannot know the skill exists.
+
+**`allowed-tools` in `SKILL.md` is declarative, not enforcing** — in both
+non-interactive and interactive mode. Non-interactive arms pre-approved only
+`Skill`; interactive arms were driven through a PTY harness.
+
+| Mode | Skill frontmatter | Tool attempted | Outcome |
+|---|---|---|---|
+| `-p` | `["Read"]` | Bash `echo` | **Ran** — `echo` is auto-approved regardless |
+| `-p` | `["Read","Bash"]` | Bash `echo` | Ran |
+| `-p` | `["Read"]` | Write | **Blocked** |
+| `-p` | `["Read","Write"]` | Write | **Blocked** |
+| interactive | `["Read"]` | Write | Prompted: *"Do you want to create probe-out.txt?"* |
+| interactive | `["Read","Write"]` | Write | **Prompted identically** |
+
+It neither restricts the skill nor grants it anything; runtime permission comes
+from session settings alone. Listing `Edit`/`Write` in a skill therefore creates no
+hazard — and provides no safety. Any `--apply` protection must come from the
+skill's own diff-and-confirm procedure.
+
+Two incidentals from the interactive arms, both worth knowing before writing a
+skill that invokes tools:
+
+- **Invoking a skill is itself a separate permission prompt** — *"Use skill
+  `<name>`? Claude may use instructions, code, or files from this Skill"* — shown
+  before any tool the skill goes on to call. A skill costs the user two
+  confirmations, not one.
+- **A relative path inside a skill body resolved against the skill's own
+  directory**, not the session cwd: `./probe-out.txt` was proposed as
+  `.claude/skills/writeprobe/probe-out.txt`. Skill bodies should use explicit
+  paths.
+
+### Not verified
+
+- **Enterprise / managed-policy scope.** No managed-settings path exists on this
+  machine and creating one needs admin rights.
+- **Load order** — row 22 is an observation, not a proof.
+- **Whether the depth limit counts files or hops** in topologies other than the
+  chain and diamond tested.
+- **Permission spec syntax.** `claude --help` documents `Bash(git *)` with a space;
+  this repo's `settings.json` and the note below use `Bash(git:*)` with a colon.
+  Both forms appear in the wild and the discrepancy is unresolved.
 
 ---
 
