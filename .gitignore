@@ -3,3 +3,7 @@
 
 # OS cruft
 .DS_Store
+
+# Python artefacts
+__pycache__/
+*.pyc
