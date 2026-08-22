@@ -37,7 +37,12 @@ def transcripts(root):
 
 
 def scan(files):
-    """Latest observed size per component, plus the measured baseline."""
+    """MOST RECENT size per component, plus the measured baseline.
+
+    Components are taken from the newest transcript that recorded them, not the
+    largest ever seen: the report answers what this repo costs now. The baseline
+    stays a floor across all sessions, because that is what a floor means.
+    """
     comp = {}
     per_turn = {}
     hooks = []
@@ -71,20 +76,20 @@ def scan(files):
                 size = len(json.dumps(a))
                 if kind == 'hook_success':
                     size = len(str(a.get('stdout') or a.get('content') or ''))
-                    # One entry per distinct hook, keeping its largest observed
-                    # output -- the same hook fires once per session.
+                    # One entry per distinct hook, holding its MOST RECENT output.
+                    # Transcripts are iterated oldest-first, so later writes win:
+                    # the question is what this repo costs now, not at its worst.
                     key = (a.get('hookName'), a.get('hookEvent'))
                     prior = next((h for h in hooks if (h['name'], h['event']) == key), None)
                     if prior is None:
                         hooks.append(dict(name=key[0], event=key[1],
                                           ms=a.get('durationMs'), chars=size))
-                    elif size > prior['chars']:
+                    else:
                         prior['chars'], prior['ms'] = size, a.get('durationMs')
                 if kind in COMPONENTS:
-                    prev = comp.get(kind)
                     detail = a.get('skillCount') if kind == 'skill_listing' else None
-                    if prev is None or size > prev['chars']:
-                        comp[kind] = dict(chars=size, detail=detail)
+                    names = a.get('names') if kind == 'skill_listing' else None
+                    comp[kind] = dict(chars=size, detail=detail, names=names or [])
                 elif kind in PER_TURN:
                     size = len(str(a.get('text') or ''))
                     e = per_turn.setdefault(kind, dict(chars=size, count=0))
@@ -112,7 +117,7 @@ def tok(chars):
     return round(chars / CHARS_PER_TOKEN)
 
 
-def report(root, comp, per_turn, hooks, floor, sessions, turns, md_bytes):
+def report(root, comp, per_turn, hooks, floor, sessions, turns, md_bytes):  # noqa: C901
     print('FIXED PER-TURN OVERHEAD — %s\n' % os.path.realpath(root))
 
     print('MEASURED')
@@ -122,7 +127,7 @@ def report(root, comp, per_turn, hooks, floor, sessions, turns, md_bytes):
     else:
         print('  no transcripts for this path — components only, no baseline')
 
-    print('\nCOMPONENTS IN THE CACHED PREFIX   (chars -> estimated tokens)')
+    print('\nCOMPONENTS IN THE CACHED PREFIX   (most recent observation)')
     rows, accounted = [], 0
     for kind, label in COMPONENTS.items():
         if kind not in comp:
@@ -169,8 +174,21 @@ def report(root, comp, per_turn, hooks, floor, sessions, turns, md_bytes):
                          % (h['name'], f"{h['chars']:,}", f"{tok(h['chars']):,}", h['ms']))
     sl = comp.get('skill_listing')
     if sl and (sl['detail'] or 0) > LISTED_SKILLS_WARN:
-        found.append('  [class 2] %d skills in the listing, ~%s t every turn — run skill-lint'
-                     % (sl['detail'], f"{tok(sl['chars']):,}"))
+        # Say where they come from: skill-lint --scope project can only act on
+        # this repo's own, and pruning someone else's plugin is a different job.
+        proj = os.path.join(os.path.realpath(root), '.claude', 'skills')
+        mine = [n for n in sl.get('names') or []
+                if os.path.isdir(os.path.join(proj, n))]
+        other = (sl['detail'] or 0) - len(mine)
+        found.append('  [class 2] %d skills listed, ~%s t every turn — %d from this '
+                     'project, %d from user or plugin scope'
+                     % (sl['detail'], f"{tok(sl['chars']):,}", len(mine), other))
+        if mine:
+            found.append('            skill-lint --scope project covers: %s'
+                         % ', '.join(sorted(mine)))
+        if other:
+            found.append('            the rest are installed elsewhere; pruning them '
+                         'means uninstalling a plugin, not editing this repo')
     if md_bytes > 4000:
         found.append('  [class 2] CLAUDE.md roots total %s B — run claude-md-audit'
                      % f'{md_bytes:,}')

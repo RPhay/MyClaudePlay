@@ -524,6 +524,13 @@ measured across the real `skill_listing` attachments in this machine's
 transcripts. With the flag set the always-on cost is exactly zero, and the model
 cannot know the skill exists.
 
+**Both permission-spec spellings work.** `claude --help` documents
+`Bash(git *)` with a space while settings files use `Bash(git:*)` with a colon.
+Measured 2026-08-22 with `--allowed-tools` against a command that is *not*
+auto-approved (`touch`): the control was denied and the file was not created,
+while both `Bash(touch *)` and `Bash(touch:*)` permitted it. The discrepancy is
+not a conflict — either spelling is accepted, so a linter must not flag one.
+
 **A skill's identity is its directory name, not its `name` field.** A skill in
 `dirname-alpha/` declaring `name: namefield-beta` was listed and invoked as
 `dirname-alpha`, while its `description` was still read from the frontmatter.
@@ -580,9 +587,6 @@ skill that invokes tools:
 - **Load order** — row 22 is an observation, not a proof.
 - **Whether the depth limit counts files or hops** in topologies other than the
   chain and diamond tested.
-- **Permission spec syntax.** `claude --help` documents `Bash(git *)` with a space;
-  this repo's `settings.json` and the note below use `Bash(git:*)` with a colon.
-  Both forms appear in the wild and the discrepancy is unresolved.
 
 ---
 
@@ -665,4 +669,5 @@ Specific things a replacement suite would need to cover:
 - **Permissions moved to committed `.claude/settings.json`** (2026-08-20), so a
   clone works without each person adding the rule. `.gitignore` still excludes
   `settings.local.json`; no such file exists in the repo. Note the rule syntax is
-  `Bash(<prefix>:*)` — colon, not the space this file previously showed.
+  `Bash(<prefix>:*)` — colon. Measured 2026-08-22: the space form
+  `Bash(<prefix> *)` works too, so both are valid and neither is wrong.

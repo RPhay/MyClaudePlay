@@ -10,3 +10,6 @@ __pycache__/
 
 # Benchmark working output (tests/README.md: "delete it freely")
 .bench/
+
+# Local token calibration (machine- and model-specific, timestamped)
+.claude/.calibration.json

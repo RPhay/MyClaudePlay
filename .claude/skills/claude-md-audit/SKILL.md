@@ -3,7 +3,7 @@ name: claude-md-audit
 description: Audits the CLAUDE.md instruction graph and reports its per-turn token cost. Walks every CLAUDE.md and CLAUDE.local.md from the filesystem root down to the working directory plus ~/.claude, follows @-imports transitively, and reports dead imports, imports past the depth limit that silently never load, accidental imports created by @file mentions in prose, and instructions duplicated across scopes. Use when diagnosing token cost, auditing repo setup, or before changing CLAUDE.md. --apply fixes safe findings.
 allowed-tools: ["Read", "Glob", "Bash(python3:*)", "Bash(git:*)", "Edit", "Write"]
 disable-model-invocation: true
-argument-hint: "[--apply] [--apply=2] [--dir <path>]"
+argument-hint: "[--apply] [--apply=2] [--calibrate] [--dir <path>]"
 ---
 
 # claude-md-audit
@@ -51,6 +51,29 @@ baseline the estimator is wrong and the report says so — believe the baseline.
 
 Costs shown are `2.0x` on the first turn (1-hour TTL cache write) and `0.1x` on
 every turn after (cache read).
+
+## --calibrate
+
+Replaces the bracket with a measurement. **It spends about a cent** — two Haiku
+sessions — so say so before running it.
+
+```
+python3 …/graph.py --root "$PWD" --calibrate
+```
+
+It runs two identical trivial sessions differing only by `CLAUDE.md`: one empty,
+one carrying the graph's own text. The difference in prompt tokens is what that
+text actually cost, wrapper included — which is the thing being billed, and not
+what a tokenizer would report.
+
+The result is cached in `.claude/.calibration.json` and every later run uses it,
+printing the ratio and the date it was measured. Re-run it when the corpus changes
+materially. On this repo it measured 3.71 chars/token against the 3.6 constant the
+other skills assume, so the assumption was sound but is no longer an assumption
+here.
+
+Ranges collapse to single figures once calibrated; that is the visible sign a
+number is measured rather than bracketed.
 
 ## Decision table
 

@@ -209,6 +209,33 @@ def graph_tilde_import_reported():
     eq([f['kind'] for f in findings if f['kind'] == 'tilde_import'], ['tilde_import'], 'tilde import')
 
 
+@case
+def graph_calibration_absent_returns_none():
+    eq(G.load_calibration(tmpdir()), None, 'no calibration file')
+
+
+@case
+def graph_calibration_loads_when_present():
+    d = tmpdir()
+    write(d, G.CALIB_REL, json.dumps(dict(ratio=3.71, chars=2837, tokens=764,
+                                          when='2026-08-22T00:00:00+00:00')))
+    eq(G.load_calibration(d)['ratio'], 3.71, 'ratio loaded')
+
+
+@case
+def graph_calibration_rejects_malformed():
+    d = tmpdir()
+    write(d, G.CALIB_REL, 'not json at all')
+    eq(G.load_calibration(d), None, 'malformed calibration ignored')
+
+
+@case
+def graph_calibration_rejects_missing_ratio():
+    d = tmpdir()
+    write(d, G.CALIB_REL, json.dumps(dict(chars=10)))
+    eq(G.load_calibration(d), None, 'calibration without a ratio ignored')
+
+
 # ------------------------------------------------------------------- lint.py
 
 L = load('skill-lint', 'lint.py')

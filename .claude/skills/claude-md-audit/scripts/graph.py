@@ -7,12 +7,15 @@ from documentation. See ../references/behaviour.md for the evidence behind each.
 Usage:
     graph.py --root <dir> [--json] [--all]
 """
-import argparse, json, os, re, sys, glob
+import argparse, json, os, re, shutil, subprocess, sys, glob, tempfile
 from collections import defaultdict
+from datetime import datetime, timezone
 
 MAX_HOP = 4                     # minimum hop distance; hop 5 silently never loads
 OVERSIZE_BYTES = 8000           # node size at which detail belongs in a reference
 DUP_MIN_CHARS = 30              # ignore short lines when hunting duplicates
+CALIB_REL = os.path.join('.claude', '.calibration.json')
+CALIB_MIN_CHARS = 200           # below this the differential is mostly noise
 
 FENCE = re.compile(r'^\s*(```|~~~)')
 INLINE_CODE = re.compile(r'`[^`]*`')
@@ -172,6 +175,88 @@ def estimate(nbytes, nwords):
     return sorted((round(nwords * 1.3), nbytes // 4))
 
 
+def prompt_tokens(text, model='haiku'):
+    """Total prompt tokens for a trivial session whose CLAUDE.md is `text`."""
+    d = tempfile.mkdtemp(prefix='calib-')
+    try:
+        with open(os.path.join(d, 'CLAUDE.md'), 'w', encoding='utf-8') as fh:
+            fh.write(text)
+        r = subprocess.run(
+            ['claude', '-p', 'Reply with the single word ok.', '--model', model,
+             '--tools', '', '--output-format', 'json', '--no-session-persistence',
+             '--max-budget-usd', '0.10'],
+            cwd=d, capture_output=True, text=True, timeout=180)
+        raw = r.stdout
+        i = raw.find('{')
+        if i < 0:
+            return None
+        u = (json.loads(raw[i:]).get('usage') or {})
+        return ((u.get('input_tokens') or 0) + (u.get('cache_read_input_tokens') or 0)
+                + (u.get('cache_creation_input_tokens') or 0))
+    except Exception:
+        return None
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def calibrate(root, nodes, model='haiku'):
+    """Measure this corpus's real chars-per-token by differential.
+
+    Two sessions identical but for CLAUDE.md: one empty, one carrying the graph's
+    own text. The delta is what that text actually cost, wrapper included -- which
+    is the thing being paid for, and not what a tokenizer would report.
+    """
+    sample = []
+    for p in sorted(nodes):
+        try:
+            sample.append(open(p, encoding='utf-8', errors='replace').read())
+        except OSError:
+            pass
+    text = '\n'.join(sample)
+    nbytes = len(text.encode('utf-8'))
+    if nbytes < CALIB_MIN_CHARS:
+        print('graph is only %d bytes — too small to calibrate against' % nbytes)
+        return None
+
+    print('Calibrating: 2 sessions on %s, one empty and one carrying %s bytes.'
+          % (model, f'{nbytes:,}'))
+    base = prompt_tokens('', model)
+    with_text = prompt_tokens(text, model)
+    if base is None or with_text is None:
+        print('calibration failed: could not run claude -p')
+        return None
+    delta = with_text - base
+    if delta <= 0:
+        print('calibration failed: no measurable difference (%d -> %d)' % (base, with_text))
+        return None
+
+    data = dict(chars=nbytes, tokens=delta, ratio=nbytes / delta, model=model,
+                when=datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                empty_prompt=base, full_prompt=with_text)
+    out = os.path.join(root, CALIB_REL)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, 'w', encoding='utf-8') as fh:
+        json.dump(data, fh, indent=2)
+        fh.write('\n')
+    print('  empty CLAUDE.md   %8s prompt tokens' % f'{base:,}')
+    print('  with the graph    %8s prompt tokens' % f'{with_text:,}')
+    print('  the graph cost    %8s tokens for %s bytes  (%.2f chars/token)'
+          % (f'{delta:,}', f'{nbytes:,}', nbytes / delta))
+    print('  written to %s' % CALIB_REL)
+    return data
+
+
+def load_calibration(root):
+    p = os.path.join(root, CALIB_REL)
+    if not os.path.isfile(p):
+        return None
+    try:
+        d = json.load(open(p, encoding='utf-8'))
+        return d if d.get('ratio') else None
+    except (OSError, ValueError):
+        return None
+
+
 def slug_for(path):
     return os.path.realpath(path).replace('/', '-')
 
@@ -257,7 +342,7 @@ LABEL = {
 }
 
 
-def report(root, nodes, findings):
+def report(root, nodes, findings, calib=None):
     total_b = total_w = 0
     rows = []
     for p, meta in sorted(nodes.items(), key=lambda kv: (kv[1]['hop'], kv[0])):
@@ -267,6 +352,8 @@ def report(root, nodes, findings):
         lo, hi = estimate(b, w)
         rows.append((p, meta, b, lo, hi))
     lo, hi = estimate(total_b, total_w)
+    if calib:
+        lo = hi = round(total_b / calib['ratio'])
 
     print('CLAUDE.md INSTRUCTION GRAPH — cwd %s\n' % os.path.realpath(root))
     base, sessions = measured_baseline(root)
@@ -275,22 +362,33 @@ def report(root, nodes, findings):
         share_lo, share_hi = 100.0 * lo / base, 100.0 * hi / base
         print('  Fixed prefix baseline        %8s tokens   (%d session%s)'
               % (f'{base:,}', sessions, '' if sessions == 1 else 's'))
-        print('  Graph share of baseline      %8s' % ('%.1f%% – %.1f%%' % (share_lo, share_hi)))
+        share = ('%.1f%%' % share_lo) if calib else ('%.1f%% – %.1f%%' % (share_lo, share_hi))
+        print('  Graph share of baseline      %8s' % share)
         if hi > base:
             print('  !! estimate exceeds baseline — estimator bug, do not trust the bracket')
     else:
         print('  no transcripts for this path — estimate only')
 
-    print('\nESTIMATED (words x1.3 – bytes/4)          [--calibrate for measured]')
-    print('  Instruction graph            %8s tokens   %d nodes, %s B'
-          % ('%d – %d' % (lo, hi), len(nodes), f'{total_b:,}'))
-    print('  First turn   2.0x cache write %7s' % ('%d – %d' % (lo * 2, hi * 2)))
-    print('  Each turn after 0.1x read     %7s' % ('%d – %d' % (round(lo * .1), round(hi * .1))))
+    if calib:
+        print('\nMEASURED  (calibrated %.2f chars/token, %s)'
+              % (calib['ratio'], calib['when'][:10]))
+        print('  Instruction graph            %8s tokens   %d nodes, %s B'
+              % (f'{lo:,}', len(nodes), f'{total_b:,}'))
+    else:
+        print('\nESTIMATED (words x1.3 – bytes/4)          [--calibrate for measured]')
+        print('  Instruction graph            %8s tokens   %d nodes, %s B'
+              % ('%d – %d' % (lo, hi), len(nodes), f'{total_b:,}'))
+    pair = (lambda a, b: '%d' % a) if calib else (lambda a, b: '%d – %d' % (a, b))
+    print('  First turn   2.0x cache write %7s' % pair(lo * 2, hi * 2))
+    print('  Each turn after 0.1x read     %7s' % pair(round(lo * .1), round(hi * .1)))
 
     print('\nNODES (load order, outermost first)')
+    if calib:
+        rows = [(p, m, b, round(b / calib['ratio']), round(b / calib['ratio']))
+                for p, m, b, _l, _h in rows]
     for p, meta, b, l, h in rows:
         print('  %-58s %7s B  %5s t  %s%s'
-              % (short(p, 58), f'{b:,}', '%d–%d' % (l, h), meta['scope'],
+              % (short(p, 58), f'{b:,}', ('%d' % l) if calib else ('%d–%d' % (l, h)), meta['scope'],
                  '' if meta['hop'] == 0 else ' hop%d' % meta['hop']))
 
     print('\nFINDINGS')
@@ -328,6 +426,8 @@ def short(p, width):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--root', required=True, help='working directory to model')
+    ap.add_argument('--calibrate', action='store_true',
+                    help='measure this corpus\'s real chars-per-token; spends ~$0.01')
     ap.add_argument('--json', action='store_true')
     args = ap.parse_args()
     if not os.path.isdir(args.root):
@@ -335,6 +435,11 @@ def main():
 
     nodes, findings = walk(args.root)
     findings += extra_findings(nodes, args.root)
+    root = os.path.realpath(args.root)
+    if args.calibrate:
+        calibrate(root, nodes)
+        print('')
+    calib = load_calibration(root)
 
     if args.json:
         base, sessions = measured_baseline(args.root)
@@ -345,12 +450,13 @@ def main():
             tw += w
         lo, hi = estimate(tb, tw)
         print(json.dumps(dict(root=os.path.realpath(args.root),
+                              calibration=calib,
                               baseline=base, sessions=sessions,
                               bytes=tb, tokens_lo=lo, tokens_hi=hi,
                               nodes=list(nodes.values()),
                               findings=findings), indent=2))
     else:
-        report(args.root, nodes, findings)
+        report(args.root, nodes, findings, calib)
 
 
 if __name__ == '__main__':
